@@ -73,6 +73,30 @@ View conversation history.
 Use linker_get_conversation to see my conversation history with "backend-api"
 ```
 
+### 7. `linker_status` (v1.1.0+)
+Check connection status and health of this instance's connection to the broker.
+
+**Parameters:** None
+
+**Example:**
+```
+Use linker_status to check my connection health
+```
+
+**Output includes:**
+- Connection state (connected, registered, disconnected, etc.)
+- WebSocket status
+- Instance ID and name
+- Last heartbeat time
+- Reconnection attempts
+- Troubleshooting recommendations
+
+**When to use:**
+- After resuming a Claude Code session
+- When messages aren't being delivered
+- When you suspect connection issues
+- For debugging and monitoring
+
 ## Example Workflows
 
 ### Scenario 1: Coordinating API Changes

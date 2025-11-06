@@ -6,14 +6,45 @@
 class Storage {
   constructor() {
     this.messages = [];
-    this.instances = new Map();
+    this.instances = new Map(); // instanceId -> instance data
     this.conversations = new Map();
+    this.connectionHistory = new Map(); // name -> { currentId, previousIds: [{id, disconnectedAt}] }
+    this.disconnectionGracePeriod = 5 * 60 * 1000; // 5 minutes
   }
 
   /**
    * Register a new Claude instance
+   * Handles reconnections by tracking connection history
    */
   registerInstance(instanceId, name, description, metadata = {}) {
+    // Check if this name was previously registered
+    const history = this.connectionHistory.get(name);
+
+    if (history && history.currentId && history.currentId !== instanceId) {
+      // Previous connection exists, mark it as disconnected
+      const now = new Date().toISOString();
+      history.previousIds = history.previousIds || [];
+      history.previousIds.push({
+        id: history.currentId,
+        disconnectedAt: now
+      });
+
+      // Clean up old previous IDs outside grace period
+      history.previousIds = history.previousIds.filter(prev => {
+        const disconnectTime = new Date(prev.disconnectedAt).getTime();
+        return (Date.now() - disconnectTime) < this.disconnectionGracePeriod;
+      });
+
+      console.log(`[STORAGE] Instance "${name}" reconnecting with new ID ${instanceId} (old: ${history.currentId})`);
+    }
+
+    // Update connection history
+    this.connectionHistory.set(name, {
+      currentId: instanceId,
+      previousIds: history?.previousIds || []
+    });
+
+    // Register the instance
     this.instances.set(instanceId, {
       id: instanceId,
       name,
@@ -60,6 +91,39 @@ class Storage {
    */
   getInstanceByName(name) {
     return Array.from(this.instances.values()).find(i => i.name === name);
+  }
+
+  /**
+   * Try to resolve a stale connection ID to the current one
+   * Returns the current instance ID if the given ID is recently disconnected
+   */
+  resolveStaleConnectionId(staleId) {
+    // Search through connection history to find if this ID recently disconnected
+    for (const [name, history] of this.connectionHistory.entries()) {
+      if (history.previousIds) {
+        const recentDisconnect = history.previousIds.find(prev => {
+          if (prev.id !== staleId) return false;
+          const disconnectTime = new Date(prev.disconnectedAt).getTime();
+          return (Date.now() - disconnectTime) < this.disconnectionGracePeriod;
+        });
+
+        if (recentDisconnect && history.currentId) {
+          const instance = this.instances.get(history.currentId);
+          if (instance) {
+            console.log(`[STORAGE] Resolved stale connection ${staleId} to current ${history.currentId} for "${name}"`);
+            return history.currentId;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get connection history for debugging
+   */
+  getConnectionHistory(name) {
+    return this.connectionHistory.get(name);
   }
 
   /**
@@ -138,7 +202,10 @@ class Storage {
     this.messages = [];
     this.instances.clear();
     this.conversations.clear();
+    this.connectionHistory.clear();
   }
 }
+
+
 
 module.exports = Storage;
