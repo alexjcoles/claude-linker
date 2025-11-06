@@ -103,12 +103,20 @@ Update `BROKER_URL` in your Claude Code config to use the ngrok URL (e.g., `ws:/
 
 Once configured, Claude Code instances can use these tools:
 
+### Core Communication
 - `linker_register` - Register this instance with a name and description
-- `linker_send_message` - Send a message to a specific Claude instance
+- `linker_send_message` - Send messages with priority and expiration (v1.2.0+)
 - `linker_broadcast` - Send a message to all connected instances
 - `linker_get_messages` - Retrieve new messages for this instance
+
+### Message Confirmation (v1.2.0+)
+- `linker_mark_read` - Mark messages as read and send read receipts
+- `linker_get_receipts` - Check delivery and read status of sent messages
+
+### Monitoring
 - `linker_list_instances` - List all connected Claude instances
 - `linker_get_conversation` - Get the full conversation history
+- `linker_status` - Check connection health and troubleshoot issues (v1.1.0+)
 
 ## Example Usage
 
@@ -151,6 +159,9 @@ claude-linker/
 ├── mcp-server/                  # MCP server for Claude Code
 │   ├── index.js                 # MCP server implementation
 │   └── package.json
+├── dashboard/                   # Web dashboard (v1.2.0+)
+│   ├── index.html               # Real-time monitoring interface
+│   └── README.md                # Dashboard documentation
 ├── examples/                    # Example configurations
 │   ├── claude-config-instance1.json
 │   ├── claude-config-instance2.json
@@ -165,11 +176,40 @@ claude-linker/
 └── README.md                    # This file
 ```
 
+## Web Dashboard (v1.2.0+)
+
+Monitor your Claude Code instances in real-time with the built-in web dashboard.
+
+### Features
+- 📊 Real-time message statistics
+- 👥 Connected instance list
+- ⚡ Priority queue monitoring
+- ⏱️ Performance metrics
+- 📨 Live activity feed
+
+### Quick Start
+```bash
+# Simply open in your browser
+open dashboard/index.html
+```
+
+The dashboard automatically connects to `ws://localhost:8765` and displays:
+- Total, delivered, and read message counts
+- Message priority distribution
+- Average delivery times
+- Connected Claude instances
+- Real-time message activity
+
+For remote access, edit `BROKER_URL` in `dashboard/index.html`.
+
+See [dashboard/README.md](dashboard/README.md) for full documentation.
+
 ## Requirements
 
 - **Node.js**: Version 18 or higher
 - **Claude Code**: Latest version with MCP support
 - **Network**: Ability to run WebSocket server (localhost or accessible via ngrok)
+- **Browser** (for dashboard): Modern browser with WebSocket support
 
 ## Security Notice
 

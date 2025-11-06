@@ -18,6 +18,7 @@ class MessageBroker {
     this.storage = new Storage();
     this.connections = new Map(); // instanceId -> WebSocket
     this.wss = null;
+    this.cleanupInterval = null;
   }
 
   start() {
@@ -60,6 +61,11 @@ class MessageBroker {
       });
     });
 
+    // Start periodic cleanup of expired messages (every 5 minutes)
+    this.cleanupInterval = setInterval(() => {
+      this.storage.cleanupExpiredMessages();
+    }, 5 * 60 * 1000);
+
     console.log(`[BROKER] Claude Code Linker broker running on ws://${HOST}:${PORT}`);
   }
 
@@ -92,6 +98,18 @@ class MessageBroker {
 
       case 'heartbeat':
         this.handleHeartbeat(ws, currentInstanceId);
+        break;
+
+      case 'mark_read':
+        this.handleMarkRead(ws, currentInstanceId, payload);
+        break;
+
+      case 'get_receipts':
+        this.handleGetReceipts(ws, currentInstanceId);
+        break;
+
+      case 'get_stats':
+        this.handleGetStats(ws);
         break;
 
       default:
@@ -140,7 +158,7 @@ class MessageBroker {
   }
 
   handleSendMessage(fromInstanceId, payload) {
-    const { to, content } = payload;
+    const { to, content, priority, ttl, maxRetries } = payload;
 
     let actualFromId = fromInstanceId;
     let fromInstance = this.storage.getInstance(fromInstanceId);
@@ -182,7 +200,10 @@ class MessageBroker {
       from: actualFromId,
       fromName: fromInstance.name,
       to: toInstanceId,
-      content
+      content,
+      priority: priority || 'normal',
+      ttl: ttl || null,
+      maxRetries: maxRetries || 3
     });
 
     console.log(`[BROKER] Message from ${fromInstance.name} to ${toInstanceId === 'broadcast' ? 'all' : to}`);
@@ -200,17 +221,91 @@ class MessageBroker {
 
     this.sendMessage(ws, {
       type: 'messages',
-      messages: messages.map(({ id, from, fromName, content, timestamp }) => ({
+      messages: messages.map(({ id, from, fromName, content, timestamp, priority }) => ({
         id,
         from,
         fromName,
         content,
-        timestamp
+        timestamp,
+        priority
       }))
     });
 
-    // Mark as delivered
-    this.storage.markMessagesDelivered(messages.map(m => m.id));
+    // Mark as delivered and send delivery receipts to senders
+    const messageIds = messages.map(m => m.id);
+    this.storage.markMessagesDelivered(messageIds);
+
+    // Send delivery receipts to message senders
+    messages.forEach(msg => {
+      const senderWs = this.connections.get(msg.from);
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        this.sendMessage(senderWs, {
+          type: 'delivery_receipt',
+          receipt: {
+            messageId: msg.id,
+            to: instanceId,
+            status: 'delivered',
+            deliveredAt: new Date().toISOString()
+          }
+        });
+      }
+    });
+  }
+
+  handleMarkRead(ws, instanceId, payload) {
+    const { messageIds } = payload;
+
+    if (!messageIds || !Array.isArray(messageIds)) {
+      return this.sendError(ws, 'Invalid messageIds');
+    }
+
+    const marked = this.storage.markMessagesRead(messageIds);
+
+    // Send read receipts to message senders
+    marked.forEach(({ id, from, to }) => {
+      const senderWs = this.connections.get(from);
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        this.sendMessage(senderWs, {
+          type: 'read_receipt',
+          receipt: {
+            messageId: id,
+            to,
+            status: 'read',
+            readAt: new Date().toISOString()
+          }
+        });
+      }
+    });
+
+    this.sendMessage(ws, {
+      type: 'marked_read',
+      count: marked.length
+    });
+  }
+
+  handleGetReceipts(ws, instanceId) {
+    const receipts = this.storage.getDeliveryReceipts(instanceId);
+
+    this.sendMessage(ws, {
+      type: 'receipts',
+      receipts
+    });
+  }
+
+  handleGetStats(ws) {
+    const stats = this.storage.getMessageStats();
+    const instances = this.storage.getInstances();
+
+    this.sendMessage(ws, {
+      type: 'stats',
+      stats: {
+        ...stats,
+        instances: {
+          total: instances.length,
+          connected: this.connections.size
+        }
+      }
+    });
   }
 
   handleListInstances(ws) {
@@ -269,7 +364,8 @@ class MessageBroker {
           from: message.from,
           fromName: message.fromName,
           content: message.content,
-          timestamp: message.timestamp
+          timestamp: message.timestamp,
+          priority: message.priority
         }
       });
     }
@@ -286,6 +382,7 @@ class MessageBroker {
             fromName: message.fromName,
             content: message.content,
             timestamp: message.timestamp,
+            priority: message.priority,
             broadcast: true
           }
         });
@@ -322,6 +419,12 @@ broker.start();
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n[BROKER] Shutting down...');
+
+  // Clear cleanup interval
+  if (broker.cleanupInterval) {
+    clearInterval(broker.cleanupInterval);
+  }
+
   broker.wss.close(() => {
     console.log('[BROKER] Server closed');
     process.exit(0);
