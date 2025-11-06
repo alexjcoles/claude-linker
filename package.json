@@ -1,0 +1,27 @@
+{
+  "name": "claude-linker",
+  "version": "1.0.0",
+  "description": "Communication bridge for multiple Claude Code instances",
+  "type": "module",
+  "bin": {
+    "claude-linker": "./mcp-server/index.js"
+  },
+  "main": "./mcp-server/index.js",
+  "scripts": {
+    "install": "cd mcp-server && npm install && cd ../broker && npm install"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexjcoles/claude-linker.git"
+  },
+  "keywords": ["claude", "mcp", "collaboration", "devcontainer"],
+  "author": "Alex Coles",
+  "license": "MIT"
+}
