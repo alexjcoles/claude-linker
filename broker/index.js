@@ -142,10 +142,26 @@ class MessageBroker {
   handleSendMessage(fromInstanceId, payload) {
     const { to, content } = payload;
 
-    const fromInstance = this.storage.getInstance(fromInstanceId);
+    let actualFromId = fromInstanceId;
+    let fromInstance = this.storage.getInstance(fromInstanceId);
+
+    // If sender not found, try to resolve stale connection
     if (!fromInstance) {
-      console.error(`[BROKER] Unknown sender: ${fromInstanceId}`);
-      return;
+      const resolvedId = this.storage.resolveStaleConnectionId(fromInstanceId);
+      if (resolvedId) {
+        actualFromId = resolvedId;
+        fromInstance = this.storage.getInstance(resolvedId);
+        console.log(`[BROKER] Resolved stale sender ID ${fromInstanceId} to ${resolvedId}`);
+
+        // Send error back to the sender to trigger re-registration
+        const senderWs = this.connections.get(resolvedId);
+        if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+          this.sendError(senderWs, 'Connection ID was stale and has been updated. Please re-register if you see this message repeatedly.');
+        }
+      } else {
+        console.error(`[BROKER] Unknown sender: ${fromInstanceId} (could not resolve to current connection)`);
+        return;
+      }
     }
 
     let toInstanceId;
@@ -163,7 +179,7 @@ class MessageBroker {
 
     const message = this.storage.storeMessage({
       id: uuidv4(),
-      from: fromInstanceId,
+      from: actualFromId,
       fromName: fromInstance.name,
       to: toInstanceId,
       content
@@ -173,7 +189,7 @@ class MessageBroker {
 
     // Try to deliver immediately
     if (toInstanceId === 'broadcast') {
-      this.deliverBroadcast(message, fromInstanceId);
+      this.deliverBroadcast(message, actualFromId);
     } else {
       this.deliverMessage(toInstanceId, message);
     }

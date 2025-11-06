@@ -132,9 +132,12 @@ Claude: Let me respond with our REST API structure
 
 ## Documentation
 
+- **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
 - **[SETUP.md](SETUP.md)** - Detailed setup and installation guide
 - **[USAGE.md](USAGE.md)** - Usage examples and workflows
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Troubleshooting guide and common issues
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical architecture and design decisions
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and changes
 - **[examples/](examples/)** - Sample configuration files
 
 ## Directory Structure
@@ -152,9 +155,12 @@ claude-linker/
 │   ├── claude-config-instance1.json
 │   ├── claude-config-instance2.json
 │   └── claude-config-remote.json
+├── QUICKSTART.md                # 5-minute quick start
 ├── SETUP.md                     # Setup guide
 ├── USAGE.md                     # Usage guide
+├── TROUBLESHOOTING.md           # Troubleshooting guide
 ├── ARCHITECTURE.md              # Architecture documentation
+├── CHANGELOG.md                 # Version history
 ├── setup.sh                     # Quick setup script
 └── README.md                    # This file
 ```
@@ -191,28 +197,27 @@ Future versions will include proper security features. See [ARCHITECTURE.md](ARC
 
 ## Troubleshooting
 
-### Claude Code doesn't see the MCP tools
+Having issues? Check the **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** guide for:
+- Connection issues and "Unknown sender" errors
+- Session resume problems
+- Configuration troubleshooting
+- Network and performance issues
+- Common error messages and solutions
 
-1. Verify the config file path is correct
-2. Check that the absolute path to `mcp-server/index.js` is correct
-3. Ensure Node.js 18+ is installed: `node -v`
-4. Restart Claude Code completely
-5. Check Claude Code logs for MCP initialization errors
+### Quick Checks
 
-### Cannot connect to broker
+**Connection Status:**
+```
+Use the linker_status tool in Claude to check connection health
+```
 
-1. Verify the broker is running: `ps aux | grep node`
-2. Check the BROKER_URL matches the broker address
-3. Test WebSocket connection: `npm install -g wscat && wscat -c ws://localhost:8765`
-4. Check firewall settings
-5. If using ngrok, verify the tunnel is active
+**Verify Setup:**
+1. Broker running: `ps aux | grep node | grep broker`
+2. Config path correct: Check absolute path in `config.json`
+3. Both instances registered: Use `linker_list_instances`
+4. Test WebSocket: `wscat -c ws://localhost:8765`
 
-### Messages not delivered
-
-1. Check both instances are registered: use `linker_list_instances`
-2. Verify instance names match exactly (case-sensitive)
-3. Check broker logs for errors
-4. Ensure both MCP servers are connected to the same broker
+For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Development
 

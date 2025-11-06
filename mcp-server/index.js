@@ -18,13 +18,15 @@ import WebSocket from 'ws';
 const BROKER_URL = process.env.BROKER_URL || 'ws://localhost:8765';
 const INSTANCE_NAME = process.env.INSTANCE_NAME || `claude-${Date.now()}`;
 const INSTANCE_DESCRIPTION = process.env.INSTANCE_DESCRIPTION || 'A Claude Code instance';
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const HEARTBEAT_TIMEOUT = 10000; // 10 seconds
 
 class LinkerMCPServer {
   constructor() {
     this.server = new Server(
       {
         name: "claude-linker",
-        version: "1.0.0",
+        version: "1.1.0",
       },
       {
         capabilities: {
@@ -38,7 +40,11 @@ class LinkerMCPServer {
     this.pendingMessages = [];
     this.isRegistered = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxReconnectAttempts = 10;
+    this.heartbeatInterval = null;
+    this.heartbeatTimeout = null;
+    this.lastHeartbeat = null;
+    this.connectionState = 'disconnected'; // disconnected, connecting, connected, registered
 
     this.setupToolHandlers();
     this.connectToBroker();
@@ -46,15 +52,40 @@ class LinkerMCPServer {
 
   connectToBroker() {
     console.error(`[MCP] Connecting to broker at ${BROKER_URL}...`);
+    this.connectionState = 'connecting';
+
+    // Clean up old connection if exists
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+      }
+    }
+
+    // Clear old heartbeat
+    this.stopHeartbeat();
 
     this.ws = new WebSocket(BROKER_URL);
 
     this.ws.on('open', () => {
       console.error('[MCP] Connected to broker');
+      this.connectionState = 'connected';
       this.reconnectAttempts = 0;
+
+      // Clear old instance ID to force re-registration
+      const oldInstanceId = this.instanceId;
+      this.instanceId = null;
+      this.isRegistered = false;
+
+      if (oldInstanceId) {
+        console.error(`[MCP] Previous connection ID ${oldInstanceId} invalidated, will re-register`);
+      }
 
       // Auto-register this instance
       this.registerInstance();
+
+      // Start heartbeat
+      this.startHeartbeat();
     });
 
     this.ws.on('message', (data) => {
@@ -68,13 +99,78 @@ class LinkerMCPServer {
 
     this.ws.on('close', () => {
       console.error('[MCP] Disconnected from broker');
+      this.connectionState = 'disconnected';
       this.isRegistered = false;
+      this.stopHeartbeat();
       this.attemptReconnect();
     });
 
     this.ws.on('error', (error) => {
       console.error('[MCP] WebSocket error:', error.message);
+      this.connectionState = 'disconnected';
     });
+
+    // Setup ping/pong for connection health
+    this.ws.on('ping', () => {
+      this.lastHeartbeat = Date.now();
+    });
+
+    this.ws.on('pong', () => {
+      this.lastHeartbeat = Date.now();
+      if (this.heartbeatTimeout) {
+        clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = null;
+      }
+    });
+  }
+
+  startHeartbeat() {
+    this.stopHeartbeat(); // Clear any existing heartbeat
+    this.lastHeartbeat = Date.now();
+
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        // Send ping to broker
+        this.ws.ping();
+
+        // Set timeout for pong response
+        this.heartbeatTimeout = setTimeout(() => {
+          console.error('[MCP] Heartbeat timeout - connection appears stale');
+          this.handleStaleConnection();
+        }, HEARTBEAT_TIMEOUT);
+
+        // Also send application-level heartbeat
+        try {
+          this.sendToBroker({ type: 'heartbeat' });
+        } catch (error) {
+          console.error('[MCP] Failed to send heartbeat:', error.message);
+        }
+      } else {
+        console.error('[MCP] Connection not open, stopping heartbeat');
+        this.stopHeartbeat();
+      }
+    }, HEARTBEAT_INTERVAL);
+
+    console.error('[MCP] Heartbeat started');
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+  }
+
+  handleStaleConnection() {
+    console.error('[MCP] Detected stale connection, triggering reconnection...');
+    this.stopHeartbeat();
+    if (this.ws) {
+      this.ws.close();
+    }
   }
 
   attemptReconnect() {
@@ -84,7 +180,8 @@ class LinkerMCPServer {
       console.error(`[MCP] Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`);
       setTimeout(() => this.connectToBroker(), delay);
     } else {
-      console.error('[MCP] Max reconnection attempts reached');
+      console.error('[MCP] Max reconnection attempts reached - please restart the MCP server');
+      this.connectionState = 'failed';
     }
   }
 
@@ -117,6 +214,7 @@ class LinkerMCPServer {
       case 'registered':
         this.instanceId = message.instanceId;
         this.isRegistered = true;
+        this.connectionState = 'registered';
         console.error(`[MCP] Registered as "${message.name}" (${this.instanceId})`);
         break;
 
@@ -129,8 +227,21 @@ class LinkerMCPServer {
         console.error(`[MCP] Instance joined: ${message.instance.name}`);
         break;
 
+      case 'heartbeat_ack':
+        // Heartbeat acknowledged
+        this.lastHeartbeat = Date.now();
+        break;
+
       case 'error':
         console.error(`[MCP] Broker error: ${message.error}`);
+
+        // Check if error is due to unknown sender (stale connection)
+        if (message.error && message.error.includes('Unknown sender')) {
+          console.error('[MCP] Connection ID not recognized by broker - re-registering...');
+          this.isRegistered = false;
+          this.instanceId = null;
+          this.registerInstance();
+        }
         break;
 
       default:
@@ -258,6 +369,14 @@ class LinkerMCPServer {
               }
             }
           }
+        },
+        {
+          name: "linker_status",
+          description: "Check the connection status and health of this Claude instance's connection to the broker. Use this to troubleshoot connection issues.",
+          inputSchema: {
+            type: "object",
+            properties: {}
+          }
         }
       ]
     }));
@@ -285,6 +404,9 @@ class LinkerMCPServer {
 
           case "linker_get_conversation":
             return await this.handleGetConversation(args);
+
+          case "linker_status":
+            return await this.handleStatus();
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -491,6 +613,63 @@ class LinkerMCPServer {
         {
           type: "text",
           text: `Conversation history:\n\n${formattedMessages}`
+        }
+      ]
+    };
+  }
+
+  async handleStatus() {
+    const wsState = this.ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][this.ws.readyState] : 'NO_CONNECTION';
+    const timeSinceHeartbeat = this.lastHeartbeat ? Date.now() - this.lastHeartbeat : null;
+
+    let statusEmoji = '🔴';
+    let statusText = 'Disconnected';
+
+    if (this.connectionState === 'registered') {
+      statusEmoji = '🟢';
+      statusText = 'Connected and Registered';
+    } else if (this.connectionState === 'connected') {
+      statusEmoji = '🟡';
+      statusText = 'Connected (not registered)';
+    } else if (this.connectionState === 'connecting') {
+      statusEmoji = '🟡';
+      statusText = 'Connecting...';
+    } else if (this.connectionState === 'failed') {
+      statusEmoji = '🔴';
+      statusText = 'Connection Failed';
+    }
+
+    const statusInfo = [
+      `${statusEmoji} Status: ${statusText}`,
+      ``,
+      `Connection Details:`,
+      `- State: ${this.connectionState}`,
+      `- WebSocket: ${wsState}`,
+      `- Broker URL: ${BROKER_URL}`,
+      `- Instance Name: ${INSTANCE_NAME}`,
+      `- Instance ID: ${this.instanceId || 'Not registered'}`,
+      `- Registered: ${this.isRegistered ? 'Yes' : 'No'}`,
+      ``,
+      `Health:`,
+      `- Last heartbeat: ${timeSinceHeartbeat !== null ? `${Math.floor(timeSinceHeartbeat / 1000)}s ago` : 'Never'}`,
+      `- Reconnect attempts: ${this.reconnectAttempts}/${this.maxReconnectAttempts}`,
+      `- Pending messages: ${this.pendingMessages.length}`
+    ].join('\n');
+
+    let recommendation = '';
+    if (this.connectionState === 'disconnected' || this.connectionState === 'failed') {
+      recommendation = '\n\nRecommendation: Connection is down. The MCP server should automatically reconnect. If the issue persists, check that the broker is running and accessible.';
+    } else if (!this.isRegistered && this.connectionState === 'connected') {
+      recommendation = '\n\nRecommendation: Connected but not registered. Registration should happen automatically. If this persists, try using linker_register manually.';
+    } else if (timeSinceHeartbeat && timeSinceHeartbeat > HEARTBEAT_INTERVAL * 2) {
+      recommendation = '\n\nWarning: Heartbeat is overdue. Connection may be stale. Automatic reconnection should trigger soon.';
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: statusInfo + recommendation
         }
       ]
     };
