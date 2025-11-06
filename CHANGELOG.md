@@ -2,6 +2,142 @@
 
 All notable changes to Claude Code Linker will be documented in this file.
 
+## [1.2.0] - 2025-11-06
+
+### Added
+
+#### Message Delivery Confirmation
+- **Delivery receipts** - Automatic confirmation when messages are delivered
+  - Sent automatically when recipient calls `linker_get_messages`
+  - Real-time delivery notifications to senders
+  - Track delivery status per message
+- **Read receipts** - Confirmation when messages are read
+  - New `linker_mark_read` tool to mark messages as read
+  - Automatic read receipt delivery to senders
+  - Distinguish between delivered and read status
+- **Receipt tracking** - New `linker_get_receipts` tool
+  - View delivery and read status of sent messages
+  - Get receipts for specific messages or all recent messages
+  - Shows timestamp for delivery and read events
+
+#### Message Queue Improvements
+- **Priority support** - Three priority levels for messages
+  - High priority messages delivered first
+  - Normal priority (default)
+  - Low priority for non-urgent messages
+  - Priority sorting in queue
+- **Message expiration (TTL)** - Time-to-live for messages
+  - Set expiration time in milliseconds
+  - Automatic cleanup of expired messages
+  - Prevents stale message delivery
+- **Automatic cleanup** - Periodic cleanup of expired messages
+  - Runs every 5 minutes
+  - Removes messages past their TTL
+  - Keeps message queue lean
+- **Enhanced message states** - Comprehensive status tracking
+  - States: sent, delivered, read
+  - Timestamp tracking for each state transition
+  - Better visibility into message lifecycle
+
+#### Web Dashboard
+- **Real-time monitoring interface** - New web-based dashboard
+  - Single HTML file, no build required
+  - Dark theme optimized for monitoring
+  - Responsive design
+- **Live statistics display**
+  - Total, delivered, and read message counts
+  - Message priority distribution
+  - Average delivery time metrics
+  - Connected instance count
+- **Instance monitoring**
+  - List of all connected Claude instances
+  - Instance descriptions and metadata
+  - Last seen timestamps
+  - Filters out dashboard connections
+- **Activity feed**
+  - Real-time message activity log
+  - Delivery and read receipt tracking
+  - Color-coded message types
+  - Priority indicators
+  - Keeps last 100 messages
+
+#### MCP Server Enhancements
+- **New tool: `linker_mark_read`** - Mark messages as read
+  - Accepts array of message IDs
+  - Sends read receipts to senders
+  - Updates message status in broker
+- **New tool: `linker_get_receipts`** - View delivery receipts
+  - Get receipts for specific message or all messages
+  - Shows delivery and read timestamps
+  - Helps track message confirmation
+- **Enhanced `linker_send_message`** - Additional parameters
+  - `priority`: Set message priority (high/normal/low)
+  - `ttl`: Time to live in milliseconds
+  - `maxRetries`: Maximum delivery attempts
+  - Backward compatible (all parameters optional)
+- **Receipt storage** - In-memory receipt tracking
+  - Separate maps for delivery and read receipts
+  - Automatic receipt collection
+  - Available via `linker_get_receipts`
+
+#### Broker Enhancements
+- **New handler: `handleMarkRead`** - Process read confirmations
+  - Marks messages as read in storage
+  - Sends read receipts to senders
+  - Returns confirmation count
+- **New handler: `handleGetReceipts`** - Provide receipt information
+  - Returns delivery receipts for sender's messages
+  - Includes status and timestamps
+- **New handler: `handleGetStats`** - Provide system statistics
+  - Message counts by status
+  - Message counts by priority
+  - Average delivery time
+  - Instance statistics
+- **Enhanced message storage** - Rich message metadata
+  - Priority field with sorting
+  - TTL with automatic expiration
+  - Status tracking (sent/delivered/read)
+  - Timestamps for all state changes
+  - Retry count and max retries
+- **Periodic cleanup** - Automatic maintenance
+  - Cleanup interval every 5 minutes
+  - Removes expired messages
+  - Logs cleanup activity
+- **Graceful shutdown** - Clean termination
+  - Clears cleanup interval
+  - Closes WebSocket server properly
+
+### Changed
+
+#### Message Format
+- Messages now include `priority` field
+- Delivery includes priority in all messages
+- Backward compatible with v1.1.0 clients
+
+#### Storage Layer
+- Messages use status instead of simple delivered boolean
+- Additional fields: deliveredAt, readAt, expiresAt, priority
+- Legacy `delivered` field maintained for compatibility
+- New methods: markMessagesRead, updateMessageStatus, getDeliveryReceipts
+- Enhanced getMessagesFor with expiration filtering and priority sorting
+
+#### Version Numbers
+- Broker: 1.1.0 → 1.2.0
+- MCP Server: 1.1.0 → 1.2.0
+
+### Performance
+
+- **Message queue optimization** - Priority-based delivery
+- **Automatic cleanup** - Prevents memory growth from expired messages
+- **Efficient receipt tracking** - In-memory maps for fast lookups
+
+### Documentation
+
+- Updated README.md with v1.2.0 features
+- Added dashboard/README.md
+- Updated USAGE.md with new tools
+- Updated directory structure documentation
+
 ## [1.1.0] - 2025-11-06
 
 ### Added

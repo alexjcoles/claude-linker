@@ -133,7 +133,14 @@ class Storage {
     const messageWithTimestamp = {
       ...message,
       timestamp: new Date().toISOString(),
-      delivered: false
+      status: 'sent', // sent, delivered, read
+      delivered: false, // Legacy compatibility
+      deliveredAt: null,
+      readAt: null,
+      expiresAt: message.ttl ? new Date(Date.now() + message.ttl).toISOString() : null,
+      priority: message.priority || 'normal', // high, normal, low
+      retryCount: 0,
+      maxRetries: message.maxRetries || 3
     };
     this.messages.push(messageWithTimestamp);
     return messageWithTimestamp;
@@ -141,11 +148,23 @@ class Storage {
 
   /**
    * Get messages for a specific instance
+   * Filters out expired messages
    */
   getMessagesFor(instanceId, undeliveredOnly = true) {
+    const now = Date.now();
+
     return this.messages.filter(msg => {
+      // Check if message is expired
+      if (msg.expiresAt && new Date(msg.expiresAt).getTime() < now) {
+        return false;
+      }
+
       const isForInstance = msg.to === instanceId || msg.to === 'broadcast';
-      return undeliveredOnly ? (isForInstance && !msg.delivered) : isForInstance;
+      return undeliveredOnly ? (isForInstance && msg.status === 'sent') : isForInstance;
+    }).sort((a, b) => {
+      // Sort by priority: high > normal > low
+      const priorityOrder = { high: 0, normal: 1, low: 2 };
+      return priorityOrder[a.priority] - priorityOrder[b.priority];
     });
   }
 
@@ -153,12 +172,138 @@ class Storage {
    * Mark messages as delivered
    */
   markMessagesDelivered(messageIds) {
+    const now = new Date().toISOString();
     messageIds.forEach(id => {
       const message = this.messages.find(m => m.id === id);
       if (message) {
-        message.delivered = true;
+        message.delivered = true; // Legacy
+        message.status = 'delivered';
+        message.deliveredAt = now;
       }
     });
+    return messageIds;
+  }
+
+  /**
+   * Mark messages as read
+   */
+  markMessagesRead(messageIds) {
+    const now = new Date().toISOString();
+    const marked = [];
+
+    messageIds.forEach(id => {
+      const message = this.messages.find(m => m.id === id);
+      if (message) {
+        message.status = 'read';
+        message.readAt = now;
+        marked.push({
+          id: message.id,
+          from: message.from,
+          to: message.to
+        });
+      }
+    });
+
+    return marked;
+  }
+
+  /**
+   * Get message by ID
+   */
+  getMessage(messageId) {
+    return this.messages.find(m => m.id === messageId);
+  }
+
+  /**
+   * Update message status
+   */
+  updateMessageStatus(messageId, status) {
+    const message = this.messages.find(m => m.id === messageId);
+    if (message) {
+      message.status = status;
+      if (status === 'delivered' && !message.deliveredAt) {
+        message.deliveredAt = new Date().toISOString();
+        message.delivered = true; // Legacy
+      } else if (status === 'read' && !message.readAt) {
+        message.readAt = new Date().toISOString();
+      }
+      return message;
+    }
+    return null;
+  }
+
+  /**
+   * Get delivery receipts for messages sent by an instance
+   */
+  getDeliveryReceipts(fromInstanceId) {
+    return this.messages
+      .filter(m => m.from === fromInstanceId)
+      .map(({ id, to, status, deliveredAt, readAt, timestamp }) => ({
+        id,
+        to,
+        status,
+        sentAt: timestamp,
+        deliveredAt,
+        readAt
+      }));
+  }
+
+  /**
+   * Clean up expired messages
+   */
+  cleanupExpiredMessages() {
+    const now = Date.now();
+    const before = this.messages.length;
+
+    this.messages = this.messages.filter(msg => {
+      if (!msg.expiresAt) return true;
+      return new Date(msg.expiresAt).getTime() >= now;
+    });
+
+    const removed = before - this.messages.length;
+    if (removed > 0) {
+      console.log(`[STORAGE] Cleaned up ${removed} expired messages`);
+    }
+    return removed;
+  }
+
+  /**
+   * Get message queue statistics
+   */
+  getMessageStats() {
+    const stats = {
+      total: this.messages.length,
+      byStatus: { sent: 0, delivered: 0, read: 0 },
+      byPriority: { high: 0, normal: 0, low: 0 },
+      expired: 0,
+      avgDeliveryTime: 0
+    };
+
+    const deliveryTimes = [];
+    const now = Date.now();
+
+    this.messages.forEach(msg => {
+      stats.byStatus[msg.status] = (stats.byStatus[msg.status] || 0) + 1;
+      stats.byPriority[msg.priority] = (stats.byPriority[msg.priority] || 0) + 1;
+
+      if (msg.expiresAt && new Date(msg.expiresAt).getTime() < now) {
+        stats.expired++;
+      }
+
+      if (msg.deliveredAt) {
+        const sentTime = new Date(msg.timestamp).getTime();
+        const deliveredTime = new Date(msg.deliveredAt).getTime();
+        deliveryTimes.push(deliveredTime - sentTime);
+      }
+    });
+
+    if (deliveryTimes.length > 0) {
+      stats.avgDeliveryTime = Math.round(
+        deliveryTimes.reduce((a, b) => a + b, 0) / deliveryTimes.length
+      );
+    }
+
+    return stats;
   }
 
   /**

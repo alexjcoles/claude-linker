@@ -26,7 +26,7 @@ class LinkerMCPServer {
     this.server = new Server(
       {
         name: "claude-linker",
-        version: "1.1.0",
+        version: "1.2.0",
       },
       {
         capabilities: {
@@ -38,6 +38,8 @@ class LinkerMCPServer {
     this.ws = null;
     this.instanceId = null;
     this.pendingMessages = [];
+    this.deliveryReceipts = new Map(); // messageId -> receipt
+    this.readReceipts = new Map(); // messageId -> receipt
     this.isRegistered = false;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
@@ -232,6 +234,18 @@ class LinkerMCPServer {
         this.lastHeartbeat = Date.now();
         break;
 
+      case 'delivery_receipt':
+        // Message was delivered to recipient
+        console.error(`[MCP] Delivery receipt: message ${message.receipt.messageId} ${message.receipt.status}`);
+        this.deliveryReceipts.set(message.receipt.messageId, message.receipt);
+        break;
+
+      case 'read_receipt':
+        // Message was read by recipient
+        console.error(`[MCP] Read receipt: message ${message.receipt.messageId} read by ${message.receipt.to}`);
+        this.readReceipts.set(message.receipt.messageId, message.receipt);
+        break;
+
       case 'error':
         console.error(`[MCP] Broker error: ${message.error}`);
 
@@ -307,7 +321,7 @@ class LinkerMCPServer {
         },
         {
           name: "linker_send_message",
-          description: "Send a message to another Claude instance. Use this to communicate with other Claude Code instances working on related codebases.",
+          description: "Send a message to another Claude instance. Use this to communicate with other Claude Code instances working on related codebases. Supports priority and expiration.",
           inputSchema: {
             type: "object",
             properties: {
@@ -318,6 +332,19 @@ class LinkerMCPServer {
               content: {
                 type: "string",
                 description: "The message content to send"
+              },
+              priority: {
+                type: "string",
+                enum: ["high", "normal", "low"],
+                description: "Message priority (default: normal). High-priority messages are delivered first."
+              },
+              ttl: {
+                type: "number",
+                description: "Time to live in milliseconds. Message expires after this time (optional)."
+              },
+              maxRetries: {
+                type: "number",
+                description: "Maximum delivery retry attempts (default: 3)"
               }
             },
             required: ["to", "content"]
@@ -377,6 +404,34 @@ class LinkerMCPServer {
             type: "object",
             properties: {}
           }
+        },
+        {
+          name: "linker_mark_read",
+          description: "Mark messages as read. Sends read receipts to the senders. Use this after you've processed messages to let senders know you've seen them.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              messageIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Array of message IDs to mark as read"
+              }
+            },
+            required: ["messageIds"]
+          }
+        },
+        {
+          name: "linker_get_receipts",
+          description: "Get delivery and read receipts for messages you've sent. Check if your messages were delivered and read.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              messageId: {
+                type: "string",
+                description: "Optional: specific message ID to get receipt for. If omitted, gets all recent receipts."
+              }
+            }
+          }
         }
       ]
     }));
@@ -407,6 +462,12 @@ class LinkerMCPServer {
 
           case "linker_status":
             return await this.handleStatus();
+
+          case "linker_mark_read":
+            return await this.handleMarkRead(args);
+
+          case "linker_get_receipts":
+            return await this.handleGetReceipts(args);
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -458,22 +519,35 @@ class LinkerMCPServer {
   }
 
   async handleSendMessage(args) {
-    const { to, content } = args;
+    const { to, content, priority, ttl, maxRetries } = args;
 
     if (!this.isRegistered) {
       throw new Error('Not registered with broker. Use linker_register first.');
     }
 
+    const payload = { to, content };
+    if (priority) payload.priority = priority;
+    if (ttl) payload.ttl = ttl;
+    if (maxRetries) payload.maxRetries = maxRetries;
+
     this.sendToBroker({
       type: 'send_message',
-      payload: { to, content }
+      payload
     });
+
+    let statusText = `Message sent to ${to}`;
+    if (priority && priority !== 'normal') {
+      statusText += ` (priority: ${priority})`;
+    }
+    if (ttl) {
+      statusText += ` (expires in ${ttl / 1000}s)`;
+    }
 
     return {
       content: [
         {
           type: "text",
-          text: `Message sent to ${to}`
+          text: statusText
         }
       ]
     };
@@ -616,6 +690,113 @@ class LinkerMCPServer {
         }
       ]
     };
+  }
+
+  async handleMarkRead(args) {
+    const { messageIds } = args;
+
+    if (!this.isRegistered) {
+      throw new Error('Not registered with broker. Use linker_register first.');
+    }
+
+    if (!Array.isArray(messageIds) || messageIds.length === 0) {
+      throw new Error('messageIds must be a non-empty array');
+    }
+
+    const response = await this.sendAndWaitForResponse(
+      {
+        type: 'mark_read',
+        payload: { messageIds }
+      },
+      'marked_read'
+    );
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Marked ${response.count} message(s) as read. Read receipts sent to senders.`
+        }
+      ]
+    };
+  }
+
+  async handleGetReceipts(args) {
+    const { messageId } = args || {};
+
+    if (!this.isRegistered) {
+      throw new Error('Not registered with broker. Use linker_register first.');
+    }
+
+    if (messageId) {
+      // Get receipt for specific message
+      const delivery = this.deliveryReceipts.get(messageId);
+      const read = this.readReceipts.get(messageId);
+
+      if (!delivery && !read) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No receipt found for message ${messageId}`
+            }
+          ]
+        };
+      }
+
+      const receiptInfo = [];
+      if (delivery) {
+        receiptInfo.push(`Delivered to ${delivery.to} at ${delivery.deliveredAt}`);
+      }
+      if (read) {
+        receiptInfo.push(`Read by ${read.to} at ${read.readAt}`);
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Receipt for message ${messageId}:\n${receiptInfo.join('\n')}`
+          }
+        ]
+      };
+    } else {
+      // Get all receipts
+      const deliveryCount = this.deliveryReceipts.size;
+      const readCount = this.readReceipts.size;
+
+      if (deliveryCount === 0 && readCount === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No receipts available. Receipts appear after your messages are delivered/read."
+            }
+          ]
+        };
+      }
+
+      const receipts = [];
+
+      // Format delivery receipts
+      this.deliveryReceipts.forEach((receipt, msgId) => {
+        receipts.push(`Message ${msgId.substring(0, 8)}: Delivered to ${receipt.to} at ${receipt.deliveredAt}`);
+      });
+
+      // Format read receipts
+      this.readReceipts.forEach((receipt, msgId) => {
+        receipts.push(`Message ${msgId.substring(0, 8)}: Read by ${receipt.to} at ${receipt.readAt}`);
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Recent receipts (${deliveryCount} delivered, ${readCount} read):\n\n${receipts.join('\n')}`
+          }
+        ]
+      };
+    }
   }
 
   async handleStatus() {
