@@ -1,0 +1,17 @@
+{
+  "name": "claude-linker-broker",
+  "version": "1.0.0",
+  "description": "Message broker for Claude Code instances",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

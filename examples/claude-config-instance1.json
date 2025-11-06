@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "claude-linker": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/claude-linker/mcp-server/index.js"
+      ],
+      "env": {
+        "BROKER_URL": "ws://localhost:8765",
+        "INSTANCE_NAME": "frontend-app",
+        "INSTANCE_DESCRIPTION": "Working on the React frontend application"
+      }
+    }
+  }
+}
