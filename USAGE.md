@@ -97,6 +97,60 @@ Use linker_status to check my connection health
 - When you suspect connection issues
 - For debugging and monitoring
 
+## Automatic Message Notifications (v1.3.0+)
+
+Starting in v1.3.0, Claude is **automatically aware** of incoming messages without manual prompting.
+
+### How It Works
+
+When messages arrive, Claude sees a notification footer appended to tool responses:
+
+```
+📬 **You have 3 unread message(s)** (1 high priority!) from: alice (2), bob
+💡 Use `linker_get_messages` to read them.
+```
+
+### Example Flow
+
+**Without Notifications (v1.2.0 and earlier):**
+```
+User: Can you list all connected instances?
+Claude: [uses linker_list_instances]
+        Here are the connected instances: alice, bob, charlie
+
+User: Check if there are any new messages
+Claude: [uses linker_get_messages]
+        You have 2 new messages from alice
+```
+
+**With Automatic Notifications (v1.3.0+):**
+```
+User: Can you list all connected instances?
+Claude: [uses linker_list_instances]
+        Here are the connected instances: alice, bob, charlie
+
+        📬 **You have 2 unread message(s)** from: alice
+        💡 Use `linker_get_messages` to read them.
+
+        I see you have unread messages from alice. Would you like me to check them?
+```
+
+### Key Features
+
+- **Non-intrusive**: Appears as a footer, doesn't interrupt current work
+- **Real-time**: Push notifications via WebSocket
+- **Fallback polling**: Checks every 30 seconds if push fails
+- **Priority awareness**: High-priority messages are highlighted
+- **Grouped by sender**: Shows message counts per sender
+- **Auto-clear**: Notifications disappear after reading messages
+
+### Benefits
+
+1. **No manual checking needed** - Claude knows about messages automatically
+2. **Better workflow** - Claude can proactively suggest checking messages
+3. **Priority handling** - High-priority messages get immediate attention
+4. **Context awareness** - Claude can incorporate message awareness into responses
+
 ## Example Workflows
 
 ### Scenario 1: Coordinating API Changes
@@ -197,9 +251,10 @@ This affects my analytics queries.
 Use linker_register with a clear name and description so other instances understand your role
 ```
 
-### 2. Check for Messages Regularly
+### 2. Automatic Message Notifications (v1.3.0+)
 ```
-Periodically use linker_get_messages to stay updated on communications
+Claude is automatically notified of new messages - no manual checking needed!
+Messages appear as a footer on tool responses. Use linker_get_messages to read them.
 ```
 
 ### 3. Use Broadcast for Announcements

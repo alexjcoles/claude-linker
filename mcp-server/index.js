@@ -40,6 +40,7 @@ class LinkerMCPServer {
     this.pendingMessages = [];
     this.deliveryReceipts = new Map(); // messageId -> receipt
     this.readReceipts = new Map(); // messageId -> receipt
+    this.pendingNotifications = []; // Unread message notifications
     this.isRegistered = false;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
@@ -47,6 +48,7 @@ class LinkerMCPServer {
     this.heartbeatTimeout = null;
     this.lastHeartbeat = null;
     this.connectionState = 'disconnected'; // disconnected, connecting, connected, registered
+    this.pollInterval = null; // Fallback polling interval
 
     this.setupToolHandlers();
     this.connectToBroker();
@@ -88,6 +90,9 @@ class LinkerMCPServer {
 
       // Start heartbeat
       this.startHeartbeat();
+
+      // Start fallback polling for message notifications
+      this.startNotificationPolling();
     });
 
     this.ws.on('message', (data) => {
@@ -170,8 +175,89 @@ class LinkerMCPServer {
   handleStaleConnection() {
     console.error('[MCP] Detected stale connection, triggering reconnection...');
     this.stopHeartbeat();
+    this.stopNotificationPolling();
     if (this.ws) {
       this.ws.close();
+    }
+  }
+
+  startNotificationPolling() {
+    this.stopNotificationPolling(); // Clear any existing interval
+
+    // Poll every 30 seconds as fallback
+    this.pollInterval = setInterval(() => {
+      if (this.isRegistered && this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.sendToBroker({ type: 'get_message_count' });
+        } catch (error) {
+          // Silent fail - don't spam logs
+        }
+      }
+    }, 30000);
+
+    console.error('[MCP] Notification polling started');
+  }
+
+  stopNotificationPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+  }
+
+  getPendingNotificationSummary() {
+    if (this.pendingNotifications.length === 0) {
+      return null;
+    }
+
+    // Group by sender
+    const bySender = {};
+    let highPriorityCount = 0;
+
+    this.pendingNotifications.forEach(notif => {
+      if (!bySender[notif.from]) {
+        bySender[notif.from] = 0;
+      }
+      bySender[notif.from]++;
+
+      if (notif.priority === 'high') {
+        highPriorityCount++;
+      }
+    });
+
+    const senderNames = Object.keys(bySender);
+    const totalCount = this.pendingNotifications.length;
+
+    let summary = `\n\n📬 **You have ${totalCount} unread message(s)**`;
+
+    if (highPriorityCount > 0) {
+      summary += ` (${highPriorityCount} high priority!)`;
+    }
+
+    if (senderNames.length <= 3) {
+      // Show all senders if 3 or fewer
+      const details = senderNames.map(name => {
+        const count = bySender[name];
+        return count > 1 ? `${name} (${count})` : name;
+      }).join(', ');
+      summary += ` from: ${details}`;
+    } else {
+      // Show first 2 senders + "and X more"
+      const first = senderNames.slice(0, 2).join(', ');
+      const remaining = senderNames.length - 2;
+      summary += ` from: ${first}, and ${remaining} more`;
+    }
+
+    summary += `\n💡 Use \`linker_get_messages\` to read them.`;
+
+    return summary;
+  }
+
+  clearPendingNotifications() {
+    const count = this.pendingNotifications.length;
+    this.pendingNotifications = [];
+    if (count > 0) {
+      console.error(`[MCP] Cleared ${count} pending notification(s)`);
     }
   }
 
@@ -244,6 +330,25 @@ class LinkerMCPServer {
         // Message was read by recipient
         console.error(`[MCP] Read receipt: message ${message.receipt.messageId} read by ${message.receipt.to}`);
         this.readReceipts.set(message.receipt.messageId, message.receipt);
+        break;
+
+      case 'message_notification':
+        // New message notification (for pending count)
+        console.error(`[MCP] Message notification from ${message.notification.from}`);
+        this.pendingNotifications.push(message.notification);
+        break;
+
+      case 'message_count':
+        // Response from message count request (fallback polling)
+        if (message.count > this.pendingNotifications.length) {
+          console.error(`[MCP] Fallback poll detected ${message.count} pending messages`);
+          // Update pending notifications if we missed some
+          this.pendingNotifications = message.from.map(fromName => ({
+            from: fromName,
+            preview: '[Message available]',
+            timestamp: new Date().toISOString()
+          }));
+        }
         break;
 
       case 'error':
@@ -441,37 +546,55 @@ class LinkerMCPServer {
       const { name, arguments: args } = request.params;
 
       try {
+        let result;
+
         switch (name) {
           case "linker_register":
-            return await this.handleRegister(args);
+            result = await this.handleRegister(args);
+            break;
 
           case "linker_send_message":
-            return await this.handleSendMessage(args);
+            result = await this.handleSendMessage(args);
+            break;
 
           case "linker_broadcast":
-            return await this.handleBroadcast(args);
+            result = await this.handleBroadcast(args);
+            break;
 
           case "linker_get_messages":
-            return await this.handleGetMessages();
+            result = await this.handleGetMessages();
+            break;
 
           case "linker_list_instances":
-            return await this.handleListInstances();
+            result = await this.handleListInstances();
+            break;
 
           case "linker_get_conversation":
-            return await this.handleGetConversation(args);
+            result = await this.handleGetConversation(args);
+            break;
 
           case "linker_status":
-            return await this.handleStatus();
+            result = await this.handleStatus();
+            break;
 
           case "linker_mark_read":
-            return await this.handleMarkRead(args);
+            result = await this.handleMarkRead(args);
+            break;
 
           case "linker_get_receipts":
-            return await this.handleGetReceipts(args);
+            result = await this.handleGetReceipts(args);
+            break;
 
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
+
+        // Append pending message notification to result (except for get_messages)
+        if (name !== 'linker_get_messages') {
+          return this.appendNotificationToResponse(result);
+        }
+
+        return result;
       } catch (error) {
         return {
           content: [
@@ -484,6 +607,20 @@ class LinkerMCPServer {
         };
       }
     });
+  }
+
+  appendNotificationToResponse(response) {
+    const notification = this.getPendingNotificationSummary();
+
+    if (notification && response.content && response.content.length > 0) {
+      // Append notification to the last text content item
+      const lastContent = response.content[response.content.length - 1];
+      if (lastContent.type === 'text') {
+        lastContent.text += notification;
+      }
+    }
+
+    return response;
   }
 
   async handleRegister(args) {
@@ -589,6 +726,9 @@ class LinkerMCPServer {
     );
 
     const messages = response.messages || [];
+
+    // Clear notification state since messages are being retrieved
+    this.clearPendingNotifications();
 
     if (messages.length === 0) {
       return {

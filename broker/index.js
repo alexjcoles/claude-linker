@@ -112,6 +112,10 @@ class MessageBroker {
         this.handleGetStats(ws);
         break;
 
+      case 'get_message_count':
+        this.handleGetMessageCount(ws, currentInstanceId);
+        break;
+
       default:
         this.sendError(ws, `Unknown message type: ${type}`);
     }
@@ -308,6 +312,20 @@ class MessageBroker {
     });
   }
 
+  handleGetMessageCount(ws, instanceId) {
+    const messages = this.storage.getMessagesFor(instanceId, true);
+
+    // Get unique senders
+    const fromNames = [...new Set(messages.map(m => m.fromName))];
+
+    this.sendMessage(ws, {
+      type: 'message_count',
+      count: messages.length,
+      from: fromNames,
+      highPriority: messages.filter(m => m.priority === 'high').length
+    });
+  }
+
   handleListInstances(ws) {
     const instances = this.storage.getInstances();
 
@@ -357,6 +375,7 @@ class MessageBroker {
   deliverMessage(toInstanceId, message) {
     const ws = this.connections.get(toInstanceId);
     if (ws && ws.readyState === WebSocket.OPEN) {
+      // Send the full message
       this.sendMessage(ws, {
         type: 'new_message',
         message: {
@@ -368,12 +387,25 @@ class MessageBroker {
           priority: message.priority
         }
       });
+
+      // Also send a notification for pending message tracking
+      this.sendMessage(ws, {
+        type: 'message_notification',
+        notification: {
+          from: message.fromName,
+          preview: message.content.substring(0, 100),
+          timestamp: message.timestamp,
+          priority: message.priority,
+          hasMore: message.content.length > 100
+        }
+      });
     }
   }
 
   deliverBroadcast(message, excludeInstanceId) {
     this.connections.forEach((ws, instanceId) => {
       if (instanceId !== excludeInstanceId && ws.readyState === WebSocket.OPEN) {
+        // Send the full message
         this.sendMessage(ws, {
           type: 'new_message',
           message: {
@@ -384,6 +416,19 @@ class MessageBroker {
             timestamp: message.timestamp,
             priority: message.priority,
             broadcast: true
+          }
+        });
+
+        // Also send notification
+        this.sendMessage(ws, {
+          type: 'message_notification',
+          notification: {
+            from: message.fromName,
+            preview: message.content.substring(0, 100),
+            timestamp: message.timestamp,
+            priority: message.priority,
+            broadcast: true,
+            hasMore: message.content.length > 100
           }
         });
       }

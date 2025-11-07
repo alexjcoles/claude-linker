@@ -2,6 +2,111 @@
 
 All notable changes to Claude Code Linker will be documented in this file.
 
+## [1.3.0] - 2025-11-07
+
+### Added
+
+#### Automatic Message Notification System
+- **Push notifications** - Real-time message awareness for Claude
+  - WebSocket push notifications when new messages arrive
+  - Instant awareness without manual checking
+  - Non-intrusive notification footer appended to tool responses
+- **Pending notification tracking** - MCP server tracks unread messages
+  - Maintains list of pending notifications
+  - Groups notifications by sender
+  - Highlights high-priority messages
+  - Shows message preview (first 100 characters)
+- **Fallback polling mechanism** - Ensures notifications aren't missed
+  - Polls broker every 30 seconds for message count
+  - Lightweight `get_message_count` endpoint
+  - Catches notifications missed due to WebSocket issues
+  - Silent failure (no log spam)
+- **Smart notification display** - Context-aware notification presentation
+  - Footer appended to all tool responses except `linker_get_messages`
+  - Shows total unread count and high-priority count
+  - Groups messages by sender with counts
+  - Automatically clears when messages are retrieved
+  - Example: "📬 **You have 3 unread message(s)** (1 high priority!) from: alice (2), bob"
+
+#### Broker Enhancements
+- **New handler: `handleGetMessageCount`** - Lightweight message count query
+  - Returns message count without fetching full content
+  - Provides sender names list
+  - Includes high-priority count
+  - Used by fallback polling mechanism
+- **Enhanced message delivery** - Dual notification system
+  - Sends both `new_message` (full content) and `message_notification` (metadata)
+  - `message_notification` includes preview, priority, timestamp
+  - Supports both direct messages and broadcasts
+  - Non-blocking delivery
+
+#### MCP Server Enhancements
+- **Notification state management** - Tracks pending notifications
+  - `pendingNotifications` array for unread message metadata
+  - Automatic clearing when messages are retrieved
+  - Persistence across tool calls
+- **New method: `startNotificationPolling()`** - Fallback polling
+  - Starts polling on connection open
+  - 30-second interval
+  - Stops on disconnection
+  - Resumes on reconnection
+- **New method: `getPendingNotificationSummary()`** - Format notifications
+  - Generates user-friendly notification text
+  - Groups by sender with counts
+  - Highlights high-priority messages
+  - Includes emoji indicators
+- **New method: `appendNotificationToResponse()`** - Inject notifications
+  - Appends notification footer to tool responses
+  - Only for tools other than `linker_get_messages`
+  - Non-destructive (appends to existing text)
+- **New message handlers** - WebSocket message types
+  - `message_notification`: Push notification from broker
+  - `message_count`: Polling response with counts
+- **Enhanced `handleGetMessages()`** - Auto-clear notifications
+  - Calls `clearPendingNotifications()` after retrieving messages
+  - Prevents duplicate notifications
+  - Logs cleared count
+
+### Changed
+
+#### User Experience
+- **Proactive message awareness** - Claude now knows about messages without prompting
+  - Before: User must manually ask Claude to check messages
+  - After: Claude sees notification footer on every tool response
+  - Reduces interruption and improves workflow
+- **Non-intrusive notifications** - Appears as footer, not interruption
+  - Doesn't interrupt current task
+  - Always visible but not distracting
+  - Clears automatically when messages are read
+
+#### Protocol
+- New broker message type: `message_notification`
+- New broker message type: `message_count`
+- New broker request type: `get_message_count`
+
+#### Version Numbers
+- Broker: 1.2.0 → 1.3.0
+- MCP Server: 1.2.0 → 1.3.0
+
+### Performance
+
+- **Reduced unnecessary message fetching** - Count-only queries
+  - Lightweight polling doesn't fetch full message content
+  - Reduces bandwidth and processing
+  - Faster response times
+- **Efficient notification tracking** - In-memory array
+  - Fast append and clear operations
+  - Minimal memory footprint
+  - No persistence overhead
+
+### Compatibility
+
+- **Fully backward compatible** with v1.2.0
+- No configuration changes required
+- Existing tools work unchanged
+- Old brokers work with new MCP servers (without notifications)
+- New brokers work with old MCP servers (notifications ignored)
+
 ## [1.2.0] - 2025-11-06
 
 ### Added
