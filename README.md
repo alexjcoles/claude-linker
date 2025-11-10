@@ -113,6 +113,18 @@ Once configured, Claude Code instances can use these tools:
 - `linker_mark_read` - Mark messages as read and send read receipts
 - `linker_get_receipts` - Check delivery and read status of sent messages
 
+### Automatic Notifications (v1.3.0+)
+- **Automatic message awareness** - Claude is automatically notified of new messages
+- **Non-intrusive footer** - Unread message count appears in tool responses
+- **Priority highlighting** - High-priority messages are highlighted
+- **No manual checking required** - Messages are detected without prompting
+
+When Claude uses any linker tool, pending messages are shown:
+```
+📬 **You have 3 unread message(s)** (1 high priority!) from: alice (2), bob
+💡 Use `linker_get_messages` to read them.
+```
+
 ### Monitoring
 - `linker_list_instances` - List all connected Claude instances
 - `linker_get_conversation` - Get the full conversation history
